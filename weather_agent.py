@@ -16,6 +16,8 @@ from zoneinfo import ZoneInfo
 
 
 DEFAULT_TIMEZONE = "Asia/Seoul"
+DEFAULT_SEND_HOUR = 8
+DEFAULT_SEND_WINDOW_MINUTES = 10
 
 
 def env(name: str, default: str | None = None) -> str:
@@ -23,6 +25,27 @@ def env(name: str, default: str | None = None) -> str:
     if value is None or value == "":
         raise SystemExit(f"Missing required environment variable: {name}")
     return value
+
+
+def env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise SystemExit(f"Invalid integer environment variable {name}: {value}") from exc
+
+
+def is_allowed_send_time(now: datetime, hour: int, window_minutes: int) -> bool:
+    if hour < 0 or hour > 23:
+        raise ValueError("hour must be between 0 and 23")
+
+    if window_minutes < 1 or window_minutes > 60:
+        raise ValueError("window_minutes must be between 1 and 60")
+
+    return now.hour == hour and now.minute < window_minutes
 
 
 def get_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -190,6 +213,11 @@ def sample_message(location: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Send daily weather and fine dust information to Telegram.")
     parser.add_argument("--dry-run", action="store_true", help="Print a sample message without calling APIs.")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Send even when the current time is outside the daily send window.",
+    )
     args = parser.parse_args()
 
     location = env("LOCATION_NAME", "서울")
@@ -198,9 +226,21 @@ def main() -> int:
         print(sample_message(location))
         return 0
 
+    timezone = env("TIMEZONE", DEFAULT_TIMEZONE)
+    send_hour = env_int("SEND_HOUR", DEFAULT_SEND_HOUR)
+    send_window_minutes = env_int("SEND_WINDOW_MINUTES", DEFAULT_SEND_WINDOW_MINUTES)
+
+    now = datetime.now(ZoneInfo(timezone))
+    if not args.force and not is_allowed_send_time(now, send_hour, send_window_minutes):
+        print(
+            "Skipped Telegram weather message: "
+            f"current time {now:%Y-%m-%d %H:%M:%S %Z} is outside "
+            f"{send_hour:02d}:00-{send_hour:02d}:{send_window_minutes - 1:02d}."
+        )
+        return 0
+
     latitude = env("LATITUDE")
     longitude = env("LONGITUDE")
-    timezone = env("TIMEZONE", DEFAULT_TIMEZONE)
     token = env("TELEGRAM_BOT_TOKEN")
     chat_id = env("TELEGRAM_CHAT_ID")
 
